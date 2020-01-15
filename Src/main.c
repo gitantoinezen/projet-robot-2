@@ -57,7 +57,7 @@
 #define AVANCE 	GPIO_PIN_SET
 #define RECULE  GPIO_PIN_RESET
 #define POURCENT 640
-#define Seuil_Dist_4 1600 // corespond à 10 cm.
+#define Seuil_Dist_4 1600 // correspond à 10 cm.
 #define Seuil_Dist_3 1600
 #define Seuil_Dist_1 1600
 #define Seuil_Dist_2 1600
@@ -75,6 +75,13 @@
 #define CKd_D 0
 #define CKd_G 0
 #define DELTA 0x50
+#define FRONT 0
+#define LEFT 180
+#define RIGHT 90
+
+#define POLLING_ON 0
+#define POLLING_OFF 1
+#define UNIQUE 2
 
 #define seuil_batterie 2599 //12bits => 4096	3.3V => 4096	5.2V => seuil
 
@@ -119,8 +126,11 @@ volatile bool alerte_bat;
 
 volatile uint16_t dist_Sonar;
 volatile bool sonar_Available = false;
+uint8_t etat_sonar;
+uint8_t mode_sonar;
 
-volatile uint16_t test=0;
+volatile uint16_t cptWait = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -135,8 +145,9 @@ void controle(void);
 void Calcul_Vit(void);
 void ACS(void);
 void surveillance_batterie(void);
-void get_sonar_dist_cm(uint16_t dist);
-void set_sonar_angle(int8_t angle);
+uint16_t get_sonar_dist_cm(uint8_t mode);
+void set_sonar_angle(uint8_t angle);
+void wait_state(uint16_t time_ms);
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
@@ -161,6 +172,8 @@ int main(void)
 
   /* USER CODE BEGIN Init */
   Dist_Obst = 0;
+
+
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -187,7 +200,7 @@ int main(void)
 
   	HAL_TIM_IC_Start(&htim1, TIM_CHANNEL_2);
   	HAL_TIM_IC_Start_IT(&htim1, TIM_CHANNEL_2);
-  	HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);	//start PWM servo
+  	//HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);	//start PWM servo
   	HAL_TIM_Base_Start_IT(&htim1);
 
 
@@ -202,6 +215,13 @@ int main(void)
 
   	bool once = true;
   	set_sonar_angle(0);
+
+
+
+
+
+  	 etat_sonar = FRONT;
+  	  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 2200); //initialise le sonar vers l'avant
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -217,6 +237,10 @@ int main(void)
 		get_sonar_dist_cm(distance);
 		once = false;
 	  }
+
+	  set_sonar_angle(FRONT);
+	  set_sonar_angle(LEFT);
+	  set_sonar_angle(RIGHT);
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
@@ -1075,28 +1099,53 @@ void regulateur(void) {
 	}
 }
 
-void get_sonar_dist_cm(uint16_t dist){
-	HAL_GPIO_WritePin(GPIOB,Trig_sonar_Pin, GPIO_PIN_SET);
+uint16_t get_sonar_dist_cm(uint8_t mode){
+	uint16_t dist;
 
-	while (!sonar_Available){};
-	dist = dist_Sonar;
-	sonar_Available = false;
+	if(mode == UNIQUE || mode == POLLING_ON){
+		HAL_GPIO_WritePin(GPIOB,Trig_sonar_Pin, GPIO_PIN_SET);
+		mode_sonar = mode;
+
+		if (mode == UNIQUE){
+			while (!sonar_Available){};
+			dist = dist_Sonar;
+			sonar_Available = false;
+		}
+	}
+	else
+		HAL_GPIO_WritePin(GPIOB,Trig_sonar_Pin, GPIO_PIN_SET);
+
+	return dist;
 }
 
-void set_sonar_angle(int8_t angle){
-	switch (angle){
-		case(0):
-			__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 2200);	//0.0015*(64*10^6/37)
-			break;
-		case(-90):
-			__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 4000);	//0.0015*(64*10^6/37)
-			break;
-		case(90):
-			__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 815);	//0.0015*(64*10^6/37)
-			break;
-		default:
-			break;
-		}
+void set_sonar_angle(uint8_t angle){
+	if(angle != etat_sonar){
+
+		switch (angle){
+			case(FRONT):
+				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 2200);	//0.0015*(64*10^6/37)
+				etat_sonar = FRONT;
+				break;
+			case(LEFT):
+				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 4000);	//0.0015*(64*10^6/37)
+				etat_sonar = LEFT;
+				break;
+			case(RIGHT):
+				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 815);	//0.0015*(64*10^6/37)
+				etat_sonar = RIGHT;
+				break;
+			default:
+				break;
+			}
+		HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);	//start PWM servo
+		wait_state(1000);
+		HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_4);	//start PWM servo
+	}
+}
+
+void wait_state(uint16_t time_ms){
+	cptWait = (uint16_t)time_ms / 37;
+	while (cptWait>0);
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
@@ -1151,7 +1200,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) {
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim) {
 	static unsigned char cpt = 0;
-	static unsigned int cpt2 = 0;
+	//static unsigned int cpt2 = 0;
 
 	if ( htim->Instance == TIM2) {
 		cpt++;
@@ -1186,16 +1235,23 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim) {
 		}
 	}
 	else if ( htim->Instance == TIM1) {	//every 37ms
-		cpt2++;
+		if(cptWait>0){
+			cptWait --;
+		}
+
+		/*cpt2++;
 		if(cpt2 == 1){
 			set_sonar_angle(-90);
 		}
 		else if(cpt2 == 25){
 			set_sonar_angle(90);
 		}
-		else if(cpt2 == 50){
-			cpt2 = 0;
+		else if (cpt2 == 50){
+			set_sonar_angle(0);
 		}
+		else if(cpt2 == 75){
+			cpt2 = 0;
+		}*/
 	}
 }
 
@@ -1205,7 +1261,9 @@ void HAL_TIM_IC_CaptureCallback( TIM_HandleTypeDef *htim ){
 	dist_Sonar = (uint16_t) capturedValue / 99.8;	//(37/64MHZ)*value = 1cm = 577 us
 	sonar_Available = true;
 
-	HAL_GPIO_WritePin(GPIOB,Trig_sonar_Pin, GPIO_PIN_RESET);
+	if (mode_sonar == UNIQUE){
+		HAL_GPIO_WritePin(GPIOB,Trig_sonar_Pin, GPIO_PIN_RESET);
+	}
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
