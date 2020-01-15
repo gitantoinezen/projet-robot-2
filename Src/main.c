@@ -131,6 +131,8 @@ uint8_t mode_sonar;
 
 volatile uint16_t cptWait = 0;
 
+uint16_t posXYZ [3];
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -148,6 +150,7 @@ void surveillance_batterie(void);
 uint16_t get_sonar_dist_cm(uint8_t mode);
 void set_sonar_angle(uint8_t angle);
 void wait_state(uint16_t time_ms);
+void get_posXYZ(uint16_t posXYZ [3]);
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
@@ -216,12 +219,8 @@ int main(void)
   	bool once = true;
   	set_sonar_angle(0);
 
-
-
-
-
   	 etat_sonar = FRONT;
-  	  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 2200); //initialise le sonar vers l'avant
+  	 __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 2200); //initialise le sonar vers l'avant
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -238,9 +237,8 @@ int main(void)
 		once = false;
 	  }
 
-	  set_sonar_angle(FRONT);
-	  set_sonar_angle(LEFT);
-	  set_sonar_angle(RIGHT);
+	  get_posXYZ(posXYZ);
+	  wait_state(65000);
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
@@ -1141,6 +1139,15 @@ void set_sonar_angle(uint8_t angle){
 		wait_state(1000);
 		HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_4);	//start PWM servo
 	}
+}
+
+void get_posXYZ(uint16_t *posXYZ){
+	set_sonar_angle(FRONT);
+	posXYZ[0] = get_sonar_dist_cm(UNIQUE);
+	set_sonar_angle(LEFT);
+	posXYZ[1] = get_sonar_dist_cm(UNIQUE);
+	set_sonar_angle(RIGHT);
+	posXYZ[2] = get_sonar_dist_cm(UNIQUE);
 }
 
 void wait_state(uint16_t time_ms){
