@@ -57,7 +57,7 @@
 #define AVANCE 	GPIO_PIN_SET
 #define RECULE  GPIO_PIN_RESET
 #define POURCENT 640
-#define Seuil_Dist_4 1600 // corespond à 10 cm.
+#define Seuil_Dist_4 1600 // correspond à 10 cm.
 #define Seuil_Dist_3 1600
 #define Seuil_Dist_1 1600
 #define Seuil_Dist_2 1600
@@ -75,6 +75,13 @@
 #define CKd_D 0
 #define CKd_G 0
 #define DELTA 0x50
+#define FRONT 0
+#define LEFT 180
+#define RIGHT 90
+
+#define POLLING_ON 0
+#define POLLING_OFF 1
+#define UNIQUE 2
 
 #define seuil_batterie 2599 //12bits => 4096	3.3V => 4096	5.2V => seuil
 
@@ -84,7 +91,9 @@ enum CMDE {
 	AVANT,
 	ARRIERE,
 	DROITE,
-	GAUCHE
+	GAUCHE,
+	PARK,
+	MOVPARK
 };
 volatile enum CMDE CMDE;
 enum MODE {
@@ -119,8 +128,16 @@ volatile bool alerte_bat;
 
 volatile uint16_t dist_Sonar;
 volatile bool sonar_Available = false;
+uint8_t etat_sonar;
+uint8_t mode_sonar;
 
-volatile uint16_t test=0;
+volatile uint16_t cptWait = 0;
+
+uint16_t posXYZ [3];
+
+volatile uint16_t cptTurn = 0;
+bool turn = false;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -135,8 +152,13 @@ void controle(void);
 void Calcul_Vit(void);
 void ACS(void);
 void surveillance_batterie(void);
-void get_sonar_dist_cm(uint16_t dist);
-void set_sonar_angle(int8_t angle);
+uint16_t get_sonar_dist_cm(uint8_t mode);
+void set_sonar_angle(uint8_t angle);
+void wait_state(uint16_t time_ms);
+void get_posXYZ(uint16_t posXYZ [3]);
+void park(void);
+void turn_left(void);
+void turn_right(void);
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
@@ -161,6 +183,8 @@ int main(void)
 
   /* USER CODE BEGIN Init */
   Dist_Obst = 0;
+
+
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -187,7 +211,7 @@ int main(void)
 
   	HAL_TIM_IC_Start(&htim1, TIM_CHANNEL_2);
   	HAL_TIM_IC_Start_IT(&htim1, TIM_CHANNEL_2);
-  	HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);	//start PWM servo
+  	//HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);	//start PWM servo
   	HAL_TIM_Base_Start_IT(&htim1);
 
 
@@ -198,9 +222,17 @@ int main(void)
   	HAL_TIM_Base_Start_IT(&htim2);  // Start IT sur font montant PWM
   	HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
   	HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
+  	HAL_TIM_Encoder_Start_IT(&htim4,TIM_CHANNEL_4);
   	HAL_UART_Receive_IT(&huart3, &BLUE_RX, 1);
 
+
   	bool once = true;
+  	set_sonar_angle(0);
+
+  	 etat_sonar = FRONT;
+  	 __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 2200); //initialise le sonar vers l'avant
+  	cptTurn = 110;
+  	turn = true;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -211,11 +243,11 @@ int main(void)
 	  controle();
 	  surveillance_batterie();
 	  volatile uint16_t distance = 0;
-	  set_sonar_angle(90);
-	  if(once){
-		get_sonar_dist_cm(distance);
-		once = false;
-	  }
+
+	  //CMDE = MOVPARK;
+	  park();
+	  turn_right();
+	  //wait_state(65000);
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
@@ -1074,29 +1106,164 @@ void regulateur(void) {
 	}
 }
 
-void get_sonar_dist_cm(uint16_t dist){
-	HAL_GPIO_WritePin(GPIOB,Trig_sonar_Pin, GPIO_PIN_SET);
+uint16_t get_sonar_dist_cm(uint8_t mode){
+	uint16_t dist;
 
-	while (!sonar_Available){};
-	dist = dist_Sonar;
-	sonar_Available = false;
-}
+	if(mode == UNIQUE || mode == POLLING_ON){
+		HAL_GPIO_WritePin(GPIOB,Trig_sonar_Pin, GPIO_PIN_SET);
+		mode_sonar = mode;
 
-void set_sonar_angle(int8_t angle){
-	switch (angle){
-		case(0):
-			__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 2200);	//0.0015*(64*10^6/37)
-			break;
-		case(-90):
-			__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 4000);	//0.0015*(64*10^6/37)
-			break;
-		case(90):
-			__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 815);	//0.0015*(64*10^6/37)
-			break;
-		default:
-			break;
+		if (mode == UNIQUE){
+			while (!sonar_Available){};
+			dist = dist_Sonar;
+			sonar_Available = false;
 		}
+	}
+	else
+		HAL_GPIO_WritePin(GPIOB,Trig_sonar_Pin, GPIO_PIN_SET);
+
+	return dist;
 }
+
+void set_sonar_angle(uint8_t angle){
+	if(angle != etat_sonar){
+
+		switch (angle){
+			case(FRONT):
+				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 2200);	//0.0015*(64*10^6/37)
+				etat_sonar = FRONT;
+				break;
+			case(LEFT):
+				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 4000);	//0.0015*(64*10^6/37)
+				etat_sonar = LEFT;
+				break;
+			case(RIGHT):
+				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 815);	//0.0015*(64*10^6/37)
+				etat_sonar = RIGHT;
+				break;
+			default:
+				break;
+			}
+		HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);	//start PWM servo
+		wait_state(1000);
+		HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_4);	//start PWM servo
+	}
+}
+
+void get_posXYZ(uint16_t *pposXYZ){
+	set_sonar_angle(FRONT);
+	pposXYZ[0] = get_sonar_dist_cm(UNIQUE);
+	set_sonar_angle(LEFT);
+	pposXYZ[1] = get_sonar_dist_cm(UNIQUE);
+	set_sonar_angle(RIGHT);
+	pposXYZ[2] = get_sonar_dist_cm(UNIQUE);
+	set_sonar_angle(FRONT);
+}
+
+void wait_state(uint16_t time_ms){
+	cptWait = (uint16_t)time_ms / 37;
+	while (cptWait>0);
+}
+
+void park(void){
+	if (CMDE == PARK){
+		static bool firstTime = 1;
+		if(firstTime){
+			firstTime = 0;
+			get_posXYZ(posXYZ);
+		}
+	}
+	else if(CMDE == MOVPARK){
+		static volatile uint8_t posOK = 3;	// 3 = none ok, 2 = x ok, 1 = xy ok, 0 = everything ok
+		static uint16_t actualPosXYZ [3]= {0,0,0}; // dist x y z
+		if(!actualPosXYZ[0]){
+			get_posXYZ(actualPosXYZ);
+			dist_Sonar = 655536;
+		}
+
+		if(posOK){
+			get_sonar_dist_cm(POLLING_ON);
+			set_sonar_angle(FRONT);
+
+			switch(posOK){
+				case 3 :{
+					actualPosXYZ[0] = dist_Sonar;
+					if(actualPosXYZ[0]>posXYZ[0]){
+						_DirG = AVANCE;
+						_DirD = AVANCE;
+						_CVitG = V1;
+						_CVitD = V1;
+						//Etat = AV1;
+						Mode = ACTIF;
+					}
+					else{
+						_DirG = AVANCE;
+						_DirD = AVANCE;
+						_CVitG = 0;
+						_CVitD = 0;
+						//Etat = ARRET;
+						__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
+						__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+						Mode = SLEEP;
+						posOK = 2;
+					}
+					break;
+				}
+				case 2 :{
+					int a = 0;
+				}
+			}
+		}
+		else
+			get_sonar_dist_cm(POLLING_OFF);
+	}
+}
+
+void turn_left(void){
+
+
+	if(cptTurn){
+		_DirG = RECULE;
+		_DirD = AVANCE;
+		_CVitG = V1;
+		_CVitD = V1;
+		Mode = ACTIF;
+	}
+	else{
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+		_DirG = RECULE;
+		_DirD = AVANCE;
+		_CVitG = 0;
+		_CVitD = 0;
+		Mode = SLEEP;
+		turn = false;
+	}
+}
+
+void turn_right(void){
+
+
+	if(cptTurn){
+		_DirG = AVANCE;
+		_DirD = RECULE;
+		_CVitG = V1;
+		_CVitD = V1;
+		Mode = ACTIF;
+	}
+	else{
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+		_DirG = RECULE;
+		_DirD = AVANCE;
+		_CVitG = 0;
+		_CVitD = 0;
+		Mode = SLEEP;
+		turn = false;
+	}
+}
+
+
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart->Instance == USART3) {
@@ -1104,25 +1271,25 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 		switch (BLUE_RX) {
 		case 'F': {
 			CMDE = AVANT;
-			//New_CMDE = 1;
+			New_CMDE = 1;
 			break;
 		}
 
 		case 'B': {
 			CMDE = ARRIERE;
-			//New_CMDE = 1;
+			New_CMDE = 1;
 			break;
 		}
 
 		case 'L': {
 			CMDE = GAUCHE;
-			//New_CMDE = 1;
+			New_CMDE = 1;
 			break;
 		}
 
 		case 'R': {
 			CMDE = DROITE;
-			//New_CMDE = 1;
+			New_CMDE = 1;
 			break;
 		}
 
@@ -1130,8 +1297,20 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 			// disconnect bluetooth
 			break;
 		}
-		default:
+
+		case 'W':{
+			CMDE = PARK;
 			New_CMDE = 1;
+			break;
+		}
+
+		case 'X':{
+			CMDE = MOVPARK;
+			New_CMDE = 1;
+			break;
+		}
+		default:
+			New_CMDE = 0;
 		}
 
 		HAL_UART_Receive_IT(&huart3, &BLUE_RX, 1);
@@ -1150,6 +1329,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) {
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim) {
 	static unsigned char cpt = 0;
+	//static unsigned int cpt2 = 0;
 
 	if ( htim->Instance == TIM2) {
 		cpt++;
@@ -1183,18 +1363,47 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim) {
 			cpt = 0;
 		}
 	}
-	else if ( htim->Instance == TIM1) {
-		test ++;
+	else if ( htim->Instance == TIM1) {	//every 37ms
+		if(cptWait>0){
+			cptWait --;
+		}
+		/*if(turn){
+			cptTurn --;
+		}*/
+
+		/*cpt2++;
+		if(cpt2 == 1){
+			set_sonar_angle(-90);
+		}
+		else if(cpt2 == 25){
+			set_sonar_angle(90);
+		}
+		else if (cpt2 == 50){
+			set_sonar_angle(0);
+		}
+		else if(cpt2 == 75){
+			cpt2 = 0;
+		}*/
 	}
 }
 
 void HAL_TIM_IC_CaptureCallback( TIM_HandleTypeDef *htim ){
-	uint16_t capturedValue = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
 
-	dist_Sonar = (uint16_t) capturedValue / 99.8;	//(37/64MHZ)*value = 1cm = 577 us
-	sonar_Available = true;
+	if(htim->Instance == TIM1){
+		uint16_t capturedValue = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
 
-	HAL_GPIO_WritePin(GPIOB,Trig_sonar_Pin, GPIO_PIN_RESET);
+		dist_Sonar = (uint16_t) capturedValue / 99.8;	//(37/64MHZ)*value = 1cm = 577 us
+		sonar_Available = true;
+
+		if (mode_sonar == UNIQUE){
+			HAL_GPIO_WritePin(GPIOB,Trig_sonar_Pin, GPIO_PIN_RESET);
+		}
+	}
+	if(htim->Instance == TIM4){
+		if(turn){
+			cptTurn--;
+		}
+	}
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {

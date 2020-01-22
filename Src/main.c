@@ -91,7 +91,9 @@ enum CMDE {
 	AVANT,
 	ARRIERE,
 	DROITE,
-	GAUCHE
+	GAUCHE,
+	PARK,
+	MOVPARK
 };
 volatile enum CMDE CMDE;
 enum MODE {
@@ -133,6 +135,9 @@ volatile uint16_t cptWait = 0;
 
 uint16_t posXYZ [3];
 
+volatile uint16_t cptTurn = 0;
+bool turn = false;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -151,6 +156,9 @@ uint16_t get_sonar_dist_cm(uint8_t mode);
 void set_sonar_angle(uint8_t angle);
 void wait_state(uint16_t time_ms);
 void get_posXYZ(uint16_t posXYZ [3]);
+void park(void);
+void turn_left(void);
+void turn_right(void);
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
@@ -216,11 +224,13 @@ int main(void)
   	HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
   	HAL_UART_Receive_IT(&huart3, &BLUE_RX, 1);
 
+
   	bool once = true;
   	set_sonar_angle(0);
 
   	 etat_sonar = FRONT;
   	 __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 2200); //initialise le sonar vers l'avant
+  	turn = true;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -232,13 +242,10 @@ int main(void)
 	  surveillance_batterie();
 	  volatile uint16_t distance = 0;
 
-	  if(once){
-		get_sonar_dist_cm(distance);
-		once = false;
-	  }
-
-	  get_posXYZ(posXYZ);
-	  wait_state(65000);
+	  //CMDE = MOVPARK;
+	  park();
+	  //turn_left();
+	  //wait_state(65000);
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
@@ -1141,13 +1148,14 @@ void set_sonar_angle(uint8_t angle){
 	}
 }
 
-void get_posXYZ(uint16_t *posXYZ){
+void get_posXYZ(uint16_t *pposXYZ){
 	set_sonar_angle(FRONT);
-	posXYZ[0] = get_sonar_dist_cm(UNIQUE);
+	pposXYZ[0] = get_sonar_dist_cm(UNIQUE);
 	set_sonar_angle(LEFT);
-	posXYZ[1] = get_sonar_dist_cm(UNIQUE);
+	pposXYZ[1] = get_sonar_dist_cm(UNIQUE);
 	set_sonar_angle(RIGHT);
-	posXYZ[2] = get_sonar_dist_cm(UNIQUE);
+	pposXYZ[2] = get_sonar_dist_cm(UNIQUE);
+	set_sonar_angle(FRONT);
 }
 
 void wait_state(uint16_t time_ms){
@@ -1155,31 +1163,199 @@ void wait_state(uint16_t time_ms){
 	while (cptWait>0);
 }
 
+void park(void){
+	if (CMDE == PARK){
+		static bool firstTime = 1;
+		if(firstTime){
+			firstTime = 0;
+			get_posXYZ(posXYZ);
+		}
+	}
+	else if(CMDE == MOVPARK){
+		static volatile uint8_t posOK = 3;	// 3 = none ok, 2 = x ok, 1 = xy ok, 0 = everything ok
+		static bool turnLeftOrRight = 0;	//first left 0, first right 1
+		static uint16_t actualPosXYZ [3]= {0,0,0}; // dist x y z
+		if(!actualPosXYZ[0]){
+			get_posXYZ(actualPosXYZ);
+			dist_Sonar = 655535;
+		}
+
+		if(posOK){
+			set_sonar_angle(FRONT);
+
+			switch(posOK){
+				case 3 :{
+					get_sonar_dist_cm(POLLING_ON);
+					actualPosXYZ[0] = dist_Sonar;
+					if(actualPosXYZ[0]>posXYZ[0]){
+						_DirG = AVANCE;
+						_DirD = AVANCE;
+						_CVitG = V1;
+						_CVitD = V1;
+						//Etat = AV1;
+						Mode = ACTIF;
+					}
+					else{
+						get_sonar_dist_cm(POLLING_OFF);
+						_DirG = AVANCE;
+						_DirD = AVANCE;
+						_CVitG = 0;
+						_CVitD = 0;
+						//Etat = ARRET;
+						__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
+						__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+						Mode = SLEEP;
+						posOK = 2;
+					}
+					break;
+				}
+				case 2 :{
+					static bool turnFinnished = false;
+
+					if(!turnFinnished){
+						if(actualPosXYZ[1]>posXYZ[1]){
+							turnLeftOrRight = 0;
+							turn_left();
+							if(turn == false)
+								turnFinnished = true;
+						}
+					}
+					else{
+						get_sonar_dist_cm(POLLING_ON);
+						actualPosXYZ[1] = dist_Sonar;
+						if(actualPosXYZ[1]>posXYZ[1]){
+							_DirG = AVANCE;
+							_DirD = AVANCE;
+							_CVitG = V1;
+							_CVitD = V1;
+							//Etat = AV1;
+							Mode = ACTIF;
+						}
+						else{
+							get_sonar_dist_cm(POLLING_OFF);
+							_DirG = AVANCE;
+							_DirD = AVANCE;
+							_CVitG = 0;
+							_CVitD = 0;
+							//Etat = ARRET;
+							__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
+							__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+							Mode = SLEEP;
+						//	posOK = 1;
+						}
+					}
+				}
+				case 1 :{
+					static bool turnFinnished = false;
+
+					if(!turnFinnished){
+						if(turnLeftOrRight == 0){
+							//turn_right();
+							if(turn == false){
+								turnFinnished = true;
+								posOK = 0;
+							}
+						}
+					}
+				}
+
+			}
+		}
+		else
+			get_sonar_dist_cm(POLLING_OFF);
+	}
+}
+
+void turn_left(void){
+	static bool order = 1;
+
+	if(order){
+	HAL_TIM_Encoder_Start_IT(&htim4,TIM_CHANNEL_4);
+	cptTurn = 250;
+	turn = true;
+	order = 0;
+	}
+
+	if(cptTurn){
+		_DirG = RECULE;
+		_DirD = AVANCE;
+		_CVitG = V1;
+		_CVitD = V1;
+		Mode = ACTIF;
+	}
+	else{
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+		_DirG = RECULE;
+		_DirD = AVANCE;
+		_CVitG = 0;
+		_CVitD = 0;
+		Mode = SLEEP;
+		turn = false;
+		HAL_TIM_Encoder_Stop_IT(&htim4,TIM_CHANNEL_4);
+		HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
+		order = 1;
+	}
+}
+
+void turn_right(void){
+	static bool order = 1;
+
+		if(order){
+		HAL_TIM_Encoder_Start_IT(&htim4,TIM_CHANNEL_4);
+		cptTurn = 250;
+		turn = true;
+		order = 0;
+		}
+
+	if(cptTurn){
+		_DirG = AVANCE;
+		_DirD = RECULE;
+		_CVitG = V1;
+		_CVitD = V1;
+		Mode = ACTIF;
+	}
+	else{
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+		_DirG = RECULE;
+		_DirD = AVANCE;
+		_CVitG = 0;
+		_CVitD = 0;
+		Mode = SLEEP;
+		turn = false;
+		HAL_TIM_Encoder_Stop_IT(&htim4,TIM_CHANNEL_4);
+		order = 1;
+	}
+}
+
+
+
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart->Instance == USART3) {
 
 		switch (BLUE_RX) {
 		case 'F': {
 			CMDE = AVANT;
-			//New_CMDE = 1;
+			New_CMDE = 1;
 			break;
 		}
 
 		case 'B': {
 			CMDE = ARRIERE;
-			//New_CMDE = 1;
+			New_CMDE = 1;
 			break;
 		}
 
 		case 'L': {
 			CMDE = GAUCHE;
-			//New_CMDE = 1;
+			New_CMDE = 1;
 			break;
 		}
 
 		case 'R': {
 			CMDE = DROITE;
-			//New_CMDE = 1;
+			New_CMDE = 1;
 			break;
 		}
 
@@ -1187,8 +1363,20 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 			// disconnect bluetooth
 			break;
 		}
-		default:
+
+		case 'W':{
+			CMDE = PARK;
 			New_CMDE = 1;
+			break;
+		}
+
+		case 'X':{
+			CMDE = MOVPARK;
+			New_CMDE = 1;
+			break;
+		}
+		default:
+			New_CMDE = 0;
 		}
 
 		HAL_UART_Receive_IT(&huart3, &BLUE_RX, 1);
@@ -1245,6 +1433,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim) {
 		if(cptWait>0){
 			cptWait --;
 		}
+		/*if(turn){
+			cptTurn --;
+		}*/
 
 		/*cpt2++;
 		if(cpt2 == 1){
@@ -1263,13 +1454,21 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef * htim) {
 }
 
 void HAL_TIM_IC_CaptureCallback( TIM_HandleTypeDef *htim ){
-	uint16_t capturedValue = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
 
-	dist_Sonar = (uint16_t) capturedValue / 99.8;	//(37/64MHZ)*value = 1cm = 577 us
-	sonar_Available = true;
+	if(htim->Instance == TIM1){
+		uint16_t capturedValue = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
 
-	if (mode_sonar == UNIQUE){
-		HAL_GPIO_WritePin(GPIOB,Trig_sonar_Pin, GPIO_PIN_RESET);
+		dist_Sonar = (uint16_t) capturedValue / 99.8;	//(37/64MHZ)*value = 1cm = 577 us
+		sonar_Available = true;
+
+		if (mode_sonar == UNIQUE){
+			HAL_GPIO_WritePin(GPIOB,Trig_sonar_Pin, GPIO_PIN_RESET);
+		}
+	}
+	if(htim->Instance == TIM4){
+		if(turn){
+			cptTurn--;
+		}
 	}
 }
 
