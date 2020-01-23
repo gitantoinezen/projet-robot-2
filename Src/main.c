@@ -238,7 +238,8 @@ int main(void)
   while (1)
   {
 	  Gestion_Commandes();
-	  controle();
+	  if(CMDE!=MOVPARK)
+		  controle();
 	  surveillance_batterie();
 	  volatile uint16_t distance = 0;
 
@@ -362,6 +363,20 @@ if (New_CMDE) {
 			Etat = ARRET;
 			Mode = SLEEP;
 
+			break;
+		}
+		case MOVPARK:{
+			switch (Etat) {
+			case VEILLE: {
+				Etat = VEILLE;
+				Mode = SLEEP;
+				break;
+				}
+			case ARRET: {
+				Mode = ACTIF;
+				break;
+				}
+			}
 			break;
 		}
 		case AVANT: {
@@ -1172,15 +1187,16 @@ void park(void){
 		}
 	}
 	else if(CMDE == MOVPARK){
-		static volatile uint8_t posOK = 3;	// 3 = none ok, 2 = x ok, 1 = xy ok, 0 = everything ok
-		static bool turnLeftOrRight = 0;	//first left 0, first right 1
+		static volatile int8_t posOK = 3;	// 3 = none ok, 2 = x ok, 1 = xy ok, 0 = everything ok
+		static uint8_t turnLeftOrRight = 0;	//first left 1, first right 2
 		static uint16_t actualPosXYZ [3]= {0,0,0}; // dist x y z
 		if(!actualPosXYZ[0]){
 			get_posXYZ(actualPosXYZ);
 			dist_Sonar = 655535;
 		}
 
-		if(posOK){
+		if(posOK>=0){
+			controle();
 			set_sonar_angle(FRONT);
 
 			switch(posOK){
@@ -1190,10 +1206,16 @@ void park(void){
 					if(actualPosXYZ[0]>posXYZ[0]){
 						_DirG = AVANCE;
 						_DirD = AVANCE;
+						if(actualPosXYZ[0]-posXYZ[0]>50){
+							_CVitG = V2;
+							_CVitD = V2;
+						}
+						else{
 						_CVitG = V1;
 						_CVitD = V1;
+						}
 						//Etat = AV1;
-						Mode = ACTIF;
+						//Mode = ACTIF;
 					}
 					else{
 						get_sonar_dist_cm(POLLING_OFF);
@@ -1204,7 +1226,7 @@ void park(void){
 						//Etat = ARRET;
 						__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
 						__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
-						Mode = SLEEP;
+						//Mode = SLEEP;
 						posOK = 2;
 					}
 					break;
@@ -1213,23 +1235,36 @@ void park(void){
 					static bool turnFinnished = false;
 
 					if(!turnFinnished){
-						if(actualPosXYZ[1]>posXYZ[1]){
-							turnLeftOrRight = 0;
+						if(actualPosXYZ[1]>posXYZ[1]){		//turn left
+							turnLeftOrRight = 1;
 							turn_left();
+							if(turn == false)
+								turnFinnished = true;
+						}
+						else if(actualPosXYZ[1]<posXYZ[1]){	//turn right
+							turnLeftOrRight = 2;
+							turn_right();
 							if(turn == false)
 								turnFinnished = true;
 						}
 					}
 					else{
 						get_sonar_dist_cm(POLLING_ON);
-						actualPosXYZ[1] = dist_Sonar;
-						if(actualPosXYZ[1]>posXYZ[1]){
-							_DirG = AVANCE;
-							_DirD = AVANCE;
+						actualPosXYZ[turnLeftOrRight] = dist_Sonar;
+						if(actualPosXYZ[turnLeftOrRight]>posXYZ[turnLeftOrRight]){
+
+							if(actualPosXYZ[turnLeftOrRight]-posXYZ[turnLeftOrRight] > 50){
+								_CVitG = V2;
+								_CVitD = V2;
+							}
+							else{
 							_CVitG = V1;
 							_CVitD = V1;
+							}
+							_DirG = AVANCE;
+							_DirD = AVANCE;
 							//Etat = AV1;
-							Mode = ACTIF;
+							//Mode = ACTIF;
 						}
 						else{
 							get_sonar_dist_cm(POLLING_OFF);
@@ -1240,23 +1275,59 @@ void park(void){
 							//Etat = ARRET;
 							__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
 							__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
-							Mode = SLEEP;
-						//	posOK = 1;
+							//Mode = SLEEP;
+							posOK = 1;
 						}
 					}
+					break;
 				}
 				case 1 :{
 					static bool turnFinnished = false;
 
 					if(!turnFinnished){
-						if(turnLeftOrRight == 0){
-							//turn_right();
+						if(turnLeftOrRight == 1){
+							turn_right();
 							if(turn == false){
 								turnFinnished = true;
-								posOK = 0;
+							}
+						}
+						else if(turnLeftOrRight == 2){
+							turn_left();
+							if(turn == false){
+								turnFinnished = true;
 							}
 						}
 					}
+					else{
+						_DirG = AVANCE;
+						_DirD = AVANCE;
+						_CVitG = 0;
+						_CVitD = 0;
+						//Etat = ARRET;
+						__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
+						__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+						//Mode = SLEEP;
+						posOK = 0;
+					}
+					break;
+				}
+				case 0:{
+					static uint16_t cptStop = 65000;
+					cptStop --;
+					_DirG = AVANCE;
+					_DirD = AVANCE;
+					_CVitG = 0;
+					_CVitD = 0;
+					//Etat = ARRET;
+					__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
+					__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+					//Mode = SLEEP;
+					if(cptStop == 0){
+						posOK = -1;
+						cptStop = 65000;
+						Mode == SLEEP;
+					}
+					break;
 				}
 
 			}
@@ -1325,6 +1396,7 @@ void turn_right(void){
 		Mode = SLEEP;
 		turn = false;
 		HAL_TIM_Encoder_Stop_IT(&htim4,TIM_CHANNEL_4);
+		HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
 		order = 1;
 	}
 }
